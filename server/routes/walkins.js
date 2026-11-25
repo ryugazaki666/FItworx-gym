@@ -49,7 +49,7 @@ router.post("/", (req, res) => {
   const now = new Date();
   const visitDate = b.visitDate || now.toISOString().slice(0, 10);
   const visitTime = b.visitTime || now.toTimeString().slice(0, 5);
-  const status = b.status || "completed";
+  const status = b.status === "pending" ? "pending" : "completed";
 
   db.prepare(`
     INSERT INTO walkins (id, name, phone, email, service, amount, payment_method, visit_date, visit_time, status, notes, processed_by)
@@ -88,7 +88,7 @@ router.put("/:id", (req, res) => {
     return res.status(400).json({ error: PAYMENT_METHOD_ERROR });
   }
 
-  const nextStatus = b.status ?? existing.status;
+  const nextStatus = b.status === "pending" ? "pending" : b.status === "completed" ? "completed" : existing.status;
   const nextVisitDate = b.visitDate ?? existing.visit_date;
   const nextVisitTime = b.visitTime ?? existing.visit_time;
 

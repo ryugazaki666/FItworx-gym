@@ -107,10 +107,6 @@ export default function Login() {
           <button className="btn btn-primary w-full" disabled={loading}>
             {loading ? "Signing in…" : "Sign in"}
           </button>
-
-          <div className="mt-[26px] text-center text-[12.5px] text-ink-400">
-            Admin and staff access only. Demo accounts: admin@fitworx.gym / Admin123!, staff@fitworx.gym / Staff123!
-          </div>
         </form>
       </div>
     </div>

@@ -98,3 +98,18 @@ export function welcomeEmail(member, plan) {
     ].join("\n"),
   };
 }
+
+export function memberPasswordResetEmail(code) {
+  return {
+    subject: "FitWorx password reset code",
+    text: [
+      `Your FitWorx password reset code is: ${code}`,
+      "",
+      "This code expires in 10 minutes and can only be used once.",
+      "If you did not request a password reset, you can ignore this email.",
+      "",
+      "FitWorx Team",
+    ].join("\n"),
+    html: `<p>Your FitWorx password reset code is:</p><p><strong>${code}</strong></p><p>This code expires in 10 minutes and can only be used once.</p><p>If you did not request a password reset, you can ignore this email.</p><p>FitWorx Team</p>`,
+  };
+}

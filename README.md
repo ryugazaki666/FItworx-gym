@@ -98,6 +98,24 @@ trusted local network, not public internet hosting. Mobile browsers generally re
 camera access; QR scanning may be unavailable over the local HTTP URL. For reliable camera access
 and use outside the local network, deploy the frontend and API behind HTTPS on a public host.
 
+### React Native member app
+
+The Expo app in `mobile/` connects to the same Express API and database as the
+website. Install its dependencies with `npm ci --prefix mobile`, then copy
+`mobile/.env.example` to `mobile/.env`. Use `http://10.0.2.2:3001/api` for an
+Android emulator, or set the URL to the computer's IPv4 address for a physical
+phone on the same trusted Wi-Fi.
+
+Run `npm run server` and `npm run dev` in separate terminals for the API and
+website. Run `npm run mobile:apk` to build a standalone Android APK at
+`mobile/android/app/build/outputs/apk/release/app-release.apk`. The APK uses
+`EXPO_PUBLIC_API_URL` from `mobile/.env`; set it to the computer's IPv4 address
+for a physical phone or `http://10.0.2.2:3001/api` for an Android emulator.
+For development with hot reload, use `npm run mobile:android` once, then
+`npm run mobile`. See [mobile/README.md](./mobile/README.md) for full setup
+details. The app provides member registration, email-code password recovery,
+membership passes, records, and renewals.
+
 ### Deploy publicly with Cloudflare Pages
 
 The current backend is Express and writes to a SQLite file, so it cannot be deployed as a
@@ -135,6 +153,32 @@ site available over HTTPS from any device.
 6. After deployment, open `https://api.example.com/api/health`; then open the Pages URL and
    test login, member portal, and QR scanning. HTTPS is required by mobile browsers for camera
    access.
+
+### Deploy publicly on Hostinger Business/Unlimited
+
+Hostinger's managed Node.js deployment rebuilds each release into a versioned `hbuilds` folder.
+Do not store SQLite data in the app checkout, `hbuilds`, or `public_html`; those locations are
+replaced during deployment. Keep SQLite by configuring `DATABASE_PATH` to an absolute,
+writable file in a persistent private directory outside those folders. If Hostinger cannot
+provide persistent writable storage to the Node.js app, use a VPS or migrate the database
+before going live.
+
+1. Push the current source to a private GitHub repository and create a Hostinger **Node.js Web
+   App** from it. Use the repository root, Node.js 22.x or 24.x, build command `npm run build`,
+   Vite output `dist`, and Express entry file `server/index.js` (or start command `npm start`).
+2. Set the app's environment variables in Hostinger:
+   - `NODE_ENV=production`
+   - `APP_ORIGINS=https://your-domain.example`
+   - `DATABASE_PATH=/home/your-user/domains/your-domain.example/fitworx-data/fitworx.sqlite`
+     (create this private, persistent directory and confirm the Node app can write to it)
+   - `JWT_SECRET` to a new, long random value
+   - `SMTP_*` and `GEMINI_API_KEY` if those features are needed
+   - Let Hostinger provide `PORT`
+3. Run `npm run bootstrap:admin` once against the persistent database, using temporary
+   `BOOTSTRAP_ADMIN_NAME`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD` values.
+   Remove those bootstrap variables afterward. Do not run `npm run seed` on production data.
+4. Confirm `https://your-domain.example/api/health` responds, then build the mobile app with
+   `EXPO_PUBLIC_API_URL=https://your-domain.example/api` and install the new APK.
 
 Do not run `npm run seed` against a live database: it creates known demo credentials and
 sample records. Keep database backups on the persistent disk or copy them to separate secure
@@ -176,6 +220,8 @@ Use one of the seeded accounts, or ask an administrator to create additional sta
   view payment records and their secure QR pass, and submit or cancel renewal requests. New
   registrations are recorded in the shared members and payments tables; staff review member
   renewal requests from **Renewals** before confirming payment and extending the membership.
+- **React Native app**: the Expo project in `mobile/` uses the same member-portal API and
+  database as the browser portal. Password recovery requires configured SMTP email delivery.
 
 ## 6. Project structure
 
@@ -197,6 +243,9 @@ src/
   lib/                api.js (fetch client), hooks.js (data hooks), utils.js
   components/         Shared UI: Sidebar, Topbar, Modal, Toast, QR scanner, etc.
   pages/              One file per screen
+mobile/
+  App.tsx             Expo / React Native member portal
+  src/api.ts          Shared-backend API client and member types
 ```
 
 ## 7. Design notes for your thesis write-up

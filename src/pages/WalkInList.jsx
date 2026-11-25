@@ -67,13 +67,12 @@ export default function WalkInList() {
         {!loading && !error && (
           <div className="overflow-x-auto">
             <table>
-              <thead><tr><th>ID</th><th>Name</th><th>Service</th><th>Amount</th><th>Method</th><th>Date</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>ID</th><th>Name</th><th>Amount</th><th>Method</th><th>Date</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {walkins.map((w) => (
                   <tr key={w.id}>
                     <td className="text-ink-400">{w.id}</td>
                     <td className="font-semibold text-ink-900">{w.name}</td>
-                    <td>{w.service}</td>
                     <td className="font-semibold">{peso(w.amount)}</td>
                     <td>{w.payment_method}</td>
                     <td>{formatDate(w.visit_date)} {w.visit_time}</td>
@@ -91,7 +90,7 @@ export default function WalkInList() {
                   </tr>
                 ))}
                 {walkins.length === 0 && (
-                  <tr><td colSpan={8} className="text-center text-ink-400 py-8">No walk-in transactions found.</td></tr>
+                  <tr><td colSpan={7} className="text-center text-ink-400 py-8">No walk-in transactions found.</td></tr>
                 )}
               </tbody>
             </table>

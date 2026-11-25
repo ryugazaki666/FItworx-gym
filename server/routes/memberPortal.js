@@ -1,14 +1,17 @@
 import { Router } from "express";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { db, nextMemberId, nextPaymentId } from "../db.js";
+import { db, nextMemberId } from "../db.js";
 import { requireAuth, requireMember, signMemberToken } from "../auth.js";
 import { isAllowedPaymentMethod, PAYMENT_METHOD_ERROR } from "../services/paymentMethods.js";
 import { generateMemberQrDataUrl } from "../services/qr.js";
+import { hasSmtpConfig, memberPasswordResetEmail, sendMail } from "../services/email.js";
 
 const router = Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MINIMUM_GYM_AGE = 15;
+const PASSWORD_RESET_RESPONSE = "If the email is registered, a reset code has been sent.";
+const INVALID_RESET_CODE = "The reset code is invalid or expired. Request a new code and try again.";
 
 function validDob(dob) {
   if (!dob) return true;
@@ -18,12 +21,6 @@ function validDob(dob) {
   const today = new Date();
   const cutoff = new Date(Date.UTC(today.getUTCFullYear() - MINIMUM_GYM_AGE, today.getUTCMonth(), today.getUTCDate()));
   return dob <= cutoff.toISOString().slice(0, 10);
-}
-
-function addDays(isoDate, days) {
-  const date = new Date(`${isoDate}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
 }
 
 function memberTokenPayload(member) {
@@ -42,45 +39,51 @@ router.post("/register", (req, res) => {
   const email = String(body.email || "").trim();
   const password = String(body.password || "");
   const phone = String(body.phone || "").trim();
-  const planId = Number(body.planId);
+  const gender = String(body.gender || "").trim();
+  const address = String(body.address || "").trim();
+  const emergencyName = String(body.emergencyName || "").trim();
+  const emergencyRelationship = String(body.emergencyRelationship || "").trim();
+  const emergencyPhone = String(body.emergencyPhone || "").trim();
 
-  if (!firstName || !lastName || !email || !password || !phone || !planId) {
-    return res.status(400).json({ error: "Name, email, password, mobile number, and membership plan are required." });
+  if (!firstName || !lastName || !email || !password || !phone || !address) {
+    return res.status(400).json({ error: "Name, email, password, mobile number, and address are required." });
   }
+  if (body.acceptedTerms !== true) return res.status(400).json({ error: "Accept the Terms & Conditions and Privacy Policy to register." });
   if (firstName.length > 80 || lastName.length > 80 || phone.length > 32) {
     return res.status(400).json({ error: "Some profile fields are too long." });
+  }
+  if (
+    (gender && !["Male", "Female", "Prefer not to say"].includes(gender)) ||
+    address.length > 500 ||
+    emergencyName.length > 120 ||
+    emergencyRelationship.length > 80 ||
+    emergencyPhone.length > 32
+  ) {
+    return res.status(400).json({ error: "Some profile fields are invalid or too long." });
   }
   if (!EMAIL_RE.test(email) || email.length > 254) return res.status(400).json({ error: "Enter a valid email address." });
   if (password.length < 8 || password.length > 128) return res.status(400).json({ error: "Password must be between 8 and 128 characters." });
   if (!validDob(body.dob)) return res.status(400).json({ error: `Members must be at least ${MINIMUM_GYM_AGE} years old and have a valid birth date.` });
-  if (body.paymentMethod && !isAllowedPaymentMethod(body.paymentMethod)) {
-    return res.status(400).json({ error: PAYMENT_METHOD_ERROR });
-  }
-
-  const plan = db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(planId);
-  if (!plan) return res.status(400).json({ error: "Selected membership plan does not exist or is inactive." });
   if (db.prepare("SELECT id FROM members WHERE email = ? COLLATE NOCASE").get(email)) {
     return res.status(409).json({ error: "That email is already attached to a membership. Ask the front desk to enable portal access." });
   }
 
   const memberId = nextMemberId();
   const startDate = new Date().toISOString().slice(0, 10);
-  const expirationDate = addDays(startDate, plan.duration_days);
   const passwordHash = bcrypt.hashSync(password, 12);
-  const paymentMethod = body.paymentMethod || "Cash";
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(`
       INSERT INTO members (
-        id, first_name, last_name, dob, phone, email, plan_id, status,
+        id, first_name, last_name, dob, gender, phone, email, address,
+        emergency_name, emergency_relationship, emergency_phone, status,
         start_date, expiration_date, joined_date, qr_token, portal_password_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, date('now'), ?, ?)
-    `).run(memberId, firstName, lastName, body.dob || null, phone, email, plan.id, startDate, expirationDate, randomUUID(), passwordHash);
-
-    db.prepare(`
-      INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, status)
-      VALUES (?, ?, NULL, 'membership', ?, ?, ?, 'pending')
-    `).run(nextPaymentId(), memberId, plan.id, plan.price, paymentMethod);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, date('now'), ?, ?)
+    `).run(
+      memberId, firstName, lastName, body.dob || null, gender || null, phone, email,
+      address || null, emergencyName || null, emergencyRelationship || null,
+      emergencyPhone || null, startDate, startDate, randomUUID(), passwordHash
+    );
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -88,8 +91,7 @@ router.post("/register", (req, res) => {
     return res.status(400).json({ error: error.message });
   }
 
-  const member = db.prepare("SELECT id, first_name, last_name, email FROM members WHERE id = ?").get(memberId);
-  res.status(201).json({ token: signMemberToken(memberTokenPayload(member)), member: memberTokenPayload(member) });
+  res.status(201).json({ ok: true });
 });
 
 router.post("/login", (req, res) => {
@@ -107,14 +109,127 @@ router.post("/login", (req, res) => {
   res.json({ token: signMemberToken(payload), member: payload });
 });
 
+router.post("/password-reset/request", async (req, res) => {
+  const email = String(req.body?.email || "").trim();
+  if (!EMAIL_RE.test(email) || email.length > 254) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  if (!hasSmtpConfig()) {
+    return res.status(503).json({ error: "Password reset email is not configured. Please contact the front desk." });
+  }
+
+  const member = db.prepare(`
+    SELECT id, email FROM members
+    WHERE email = ? COLLATE NOCASE AND archived_at IS NULL AND portal_password_hash IS NOT NULL
+  `).get(email);
+  if (!member) return res.json({ message: PASSWORD_RESET_RESPONSE });
+
+  const resetId = randomUUID();
+  const code = String(randomInt(100000, 1000000));
+  const codeHash = bcrypt.hashSync(code, 12);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const recentRequest = db.prepare(`
+      SELECT id FROM member_password_resets
+      WHERE member_id = ? AND created_at >= datetime('now', '-1 minute')
+    `).get(member.id);
+    if (recentRequest) {
+      db.exec("ROLLBACK");
+      return res.json({ message: PASSWORD_RESET_RESPONSE });
+    }
+
+    db.prepare(`
+      UPDATE member_password_resets SET used_at = datetime('now')
+      WHERE member_id = ? AND used_at IS NULL
+    `).run(member.id);
+    db.prepare(`
+      INSERT INTO member_password_resets (id, member_id, code_hash, expires_at)
+      VALUES (?, ?, ?, datetime('now', '+10 minutes'))
+    `).run(resetId, member.id, codeHash);
+    db.prepare(`
+      DELETE FROM member_password_resets
+      WHERE created_at < datetime('now', '-7 days')
+    `).run();
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  try {
+    await sendMail({ to: member.email, ...memberPasswordResetEmail(code) });
+  } catch (error) {
+    db.prepare("UPDATE member_password_resets SET used_at = datetime('now') WHERE id = ?").run(resetId);
+    console.error("Member password reset email could not be sent.", error);
+    return res.status(503).json({ error: "Could not send the reset code. Please try again later." });
+  }
+
+  res.json({ message: PASSWORD_RESET_RESPONSE });
+});
+
+router.post("/password-reset/confirm", (req, res) => {
+  const email = String(req.body?.email || "").trim();
+  const code = String(req.body?.code || "").trim();
+  const password = String(req.body?.password || "");
+  if (!EMAIL_RE.test(email) || email.length > 254) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: INVALID_RESET_CODE });
+  if (password.length < 8 || password.length > 128) {
+    return res.status(400).json({ error: "Password must be between 8 and 128 characters." });
+  }
+
+  const member = db.prepare(`
+    SELECT id FROM members
+    WHERE email = ? COLLATE NOCASE AND archived_at IS NULL AND portal_password_hash IS NOT NULL
+  `).get(email);
+  if (!member) return res.status(400).json({ error: INVALID_RESET_CODE });
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const reset = db.prepare(`
+      SELECT id, code_hash FROM member_password_resets
+      WHERE member_id = ? AND used_at IS NULL AND expires_at > datetime('now') AND attempts < 5
+      ORDER BY created_at DESC LIMIT 1
+    `).get(member.id);
+    if (!reset) {
+      db.exec("ROLLBACK");
+      return res.status(400).json({ error: INVALID_RESET_CODE });
+    }
+
+    if (!bcrypt.compareSync(code, reset.code_hash)) {
+      db.prepare("UPDATE member_password_resets SET attempts = attempts + 1 WHERE id = ?").run(reset.id);
+      db.exec("COMMIT");
+      return res.status(400).json({ error: INVALID_RESET_CODE });
+    }
+
+    const passwordHash = bcrypt.hashSync(password, 12);
+    db.prepare(`
+      UPDATE members SET portal_password_hash = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(passwordHash, member.id);
+    db.prepare(`
+      UPDATE member_password_resets SET used_at = datetime('now')
+      WHERE member_id = ? AND used_at IS NULL
+    `).run(member.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  res.json({ ok: true });
+});
+
 router.use(requireAuth, requireMember);
 
 router.get("/me", (req, res) => {
   const member = db.prepare(`
     SELECT m.id, m.first_name, m.middle_name, m.last_name, m.dob, m.gender, m.phone, m.email,
+      m.address, m.emergency_name, m.emergency_relationship, m.emergency_phone,
       m.plan_id, m.status, m.start_date, m.expiration_date, m.joined_date,
       p.name AS plan_name, p.price AS plan_price, p.duration_days
-    FROM members m JOIN plans p ON p.id = m.plan_id
+    FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     WHERE m.id = ? AND m.archived_at IS NULL
   `).get(req.user.sub);
   if (!member) return res.status(404).json({ error: "Membership not found." });
@@ -129,12 +244,20 @@ router.get("/me", (req, res) => {
     FROM renewal_requests r JOIN plans p ON p.id = r.plan_id
     WHERE r.member_id = ? ORDER BY r.created_at DESC LIMIT 20
   `).all(member.id);
-  res.json({ ...member, name: `${member.first_name} ${member.last_name}`, payments, attendance, renewals });
+  res.json({
+    ...member,
+    has_membership: member.plan_id !== null,
+    name: `${member.first_name} ${member.last_name}`,
+    payments,
+    attendance,
+    renewals,
+  });
 });
 
 router.get("/qr", async (req, res) => {
   const member = db.prepare("SELECT * FROM members WHERE id = ? AND archived_at IS NULL").get(req.user.sub);
   if (!member) return res.status(404).json({ error: "Membership not found." });
+  if (member.plan_id === null) return res.status(409).json({ error: "Choose a membership plan before using your check-in pass." });
   try {
     res.json({ dataUrl: await generateMemberQrDataUrl(member) });
   } catch (error) {

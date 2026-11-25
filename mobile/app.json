@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "FITWORX",
+    "slug": "fitworx-members",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#f1f3f0"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.fitworxgym.members",
+      "adaptiveIcon": {
+        "backgroundColor": "#17191e",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-secure-store", "./plugins/withAndroidBuildConfig"]
+  }
+}

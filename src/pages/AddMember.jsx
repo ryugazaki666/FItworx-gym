@@ -25,7 +25,7 @@ export default function AddMember() {
   const [startDate, setStartDate] = useState(todayIso());
   const [formData, setFormData] = useState({
     firstName: "", middleName: "", lastName: "", dob: "", gender: "Male",
-    phone: "", email: "", address: "",
+    phone: "", email: "", street: "", barangay: "", city: "",
     emergencyName: "", emergencyRelationship: "", emergencyPhone: "",
     paymentMethod: "Cash", paymentStatus: "Paid", referenceNumber: "",
   });
@@ -62,6 +62,10 @@ export default function AddMember() {
       return;
     }
 
+    const address = [formData.street.trim(), formData.barangay.trim(), formData.city.trim()]
+      .filter(Boolean)
+      .join(", ");
+
     setSaving(true);
     let member;
     try {
@@ -73,7 +77,7 @@ export default function AddMember() {
         gender: formData.gender,
         phone: formData.phone || null,
         email: formData.email.trim(),
-        address: formData.address || null,
+        address: address || null,
         emergencyName: formData.emergencyName || null,
         emergencyRelationship: formData.emergencyRelationship || null,
         emergencyPhone: formData.emergencyPhone || null,
@@ -150,7 +154,9 @@ export default function AddMember() {
           </div>
           <Field label="Contact Number" name="phone" placeholder="0917 123 4567" value={formData.phone} onChange={updateField} />
           <Field label="Email" name="email" type="email" placeholder="juan@mail.com" value={formData.email} onChange={updateField} required />
-          <Field label="Address" name="address" placeholder="Street, City" value={formData.address} onChange={updateField} full />
+          <Field label="Street" name="street" placeholder="Street / House Number" value={formData.street} onChange={updateField} />
+          <Field label="Barangay" name="barangay" placeholder="Barangay" value={formData.barangay} onChange={updateField} />
+          <Field label="City" name="city" placeholder="City" value={formData.city} onChange={updateField} />
         </Section>
 
         <Section num={2} title="Emergency Contact">

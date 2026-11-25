@@ -11,7 +11,6 @@ export default function WalkInFormModal({ record = null, onClose, onSuccess }) {
     name: record?.name || "",
     phone: record?.phone || "",
     email: record?.email || "",
-    service: record?.service || "Day Pass",
     amount: record ? String(record.amount) : "",
     paymentMethod: record?.payment_method || "Cash",
     visitDate: record?.visit_date || todayIso(),
@@ -70,12 +69,6 @@ export default function WalkInFormModal({ record = null, onClose, onSuccess }) {
           <input className="input" name="email" value={form.email} onChange={handleChange} />
         </div>
         <div>
-          <label className="block text-[12.8px] font-semibold text-ink-700 mb-1.5">Service</label>
-          <select className="input" name="service" value={form.service} onChange={handleChange}>
-            <option>Day Pass</option><option>Guest Pass</option>
-          </select>
-        </div>
-        <div>
           <label className="block text-[12.8px] font-semibold text-ink-700 mb-1.5">Amount (₱) *</label>
           <input className="input" type="number" min="0" name="amount" value={form.amount} onChange={handleChange} />
         </div>
@@ -88,7 +81,7 @@ export default function WalkInFormModal({ record = null, onClose, onSuccess }) {
         <div>
           <label className="block text-[12.8px] font-semibold text-ink-700 mb-1.5">Status</label>
           <select className="input" name="status" value={form.status} onChange={handleChange}>
-            <option value="completed">Completed</option><option value="pending">Pending</option><option value="voided">Voided</option>
+            <option value="completed">Completed</option><option value="pending">Pending</option>
           </select>
         </div>
         <div>

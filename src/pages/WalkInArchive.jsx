@@ -89,15 +89,14 @@ export default function WalkInArchive() {
           <div className="overflow-x-auto">
             <table>
               <thead>
-                <tr><th>ID</th><th>Name</th><th>Service</th><th>Amount</th><th>Archived</th><th></th></tr>
+                <tr><th>ID</th><th>Name</th><th>Amount</th><th>Archived</th><th></th></tr>
               </thead>
               <tbody>
                 {walkins.map((walkin) => (
                   <tr key={walkin.id}>
                     <td className="text-ink-400">{walkin.id}</td>
                     <td className="font-semibold text-ink-900">{walkin.name}</td>
-                    <td>{walkin.service}</td>
-                    <td>{walkin.amount}</td>
+                    <td>{peso(walkin.amount)}</td>
                     <td>{formatDate(walkin.archived_at)}</td>
                     <td>
                       <div className="flex gap-1.5">
@@ -109,7 +108,7 @@ export default function WalkInArchive() {
                   </tr>
                 ))}
                 {walkins.length === 0 && (
-                  <tr><td colSpan={6} className="text-center text-ink-400 py-8">No archived walk-ins found.</td></tr>
+                  <tr><td colSpan={5} className="text-center text-ink-400 py-8">No archived walk-ins found.</td></tr>
                 )}
               </tbody>
             </table>

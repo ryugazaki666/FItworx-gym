@@ -69,4 +69,18 @@ router.post("/", (req, res) => {
   res.status(201).json(db.prepare("SELECT * FROM payments WHERE id = ?").get(id));
 });
 
+router.put("/:id", (req, res) => {
+  const existing = db.prepare("SELECT * FROM payments WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Transaction not found." });
+
+  const status = req.body?.status;
+  if (!["paid", "pending"].includes(status)) {
+    return res.status(400).json({ error: "Choose a valid transaction status." });
+  }
+
+  db.prepare("UPDATE payments SET status=? WHERE id=?").run(status, req.params.id);
+
+  res.json(db.prepare("SELECT * FROM payments WHERE id = ?").get(req.params.id));
+});
+
 export default router;

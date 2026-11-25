@@ -78,8 +78,8 @@ router.get("/", (req, res) => {
   if (plan) { clauses.push("p.name = ?"); params.push(plan); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const rows = db.prepare(`
-    SELECT m.*, p.name AS plan_name, p.price AS plan_price
-    FROM members m JOIN plans p ON p.id = m.plan_id
+    SELECT m.*, COALESCE(p.name, 'No plan selected') AS plan_name, p.price AS plan_price
+    FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     ${where}
     ORDER BY CAST(SUBSTR(m.id, 5) AS INTEGER) ASC
   `).all(...params);
@@ -88,8 +88,8 @@ router.get("/", (req, res) => {
 
 router.get("/archive", (req, res) => {
   const rows = db.prepare(`
-    SELECT m.*, p.name AS plan_name, p.price AS plan_price
-    FROM members m JOIN plans p ON p.id = m.plan_id
+    SELECT m.*, COALESCE(p.name, 'No plan selected') AS plan_name, p.price AS plan_price
+    FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     WHERE m.archived_at IS NOT NULL
     ORDER BY m.archived_at DESC, CAST(SUBSTR(m.id, 5) AS INTEGER) ASC
   `).all();
@@ -99,6 +99,7 @@ router.get("/archive", (req, res) => {
 router.get("/renewal-requests", (req, res) => {
   const rows = db.prepare(`
     SELECT r.*, m.first_name, m.last_name, m.email, m.phone,
+      (m.plan_id IS NULL) AS is_initial_membership,
       p.name AS plan_name, p.duration_days AS plan_duration_days
     FROM renewal_requests r
     JOIN members m ON m.id = r.member_id
@@ -128,16 +129,17 @@ router.patch("/renewal-requests/:id", (req, res) => {
         return res.status(409).json({ error: "The requested membership plan is no longer active." });
       }
       const today = new Date().toISOString().slice(0, 10);
-      const base = member.expiration_date < today ? today : member.expiration_date;
+      const base = !member.plan_id || member.expiration_date < today ? today : member.expiration_date;
       const expiration = addDays(base, plan.duration_days);
+      const paymentType = member.plan_id ? "renewal" : "membership";
       db.prepare(`
         UPDATE members SET plan_id = ?, expiration_date = ?, status = 'active', updated_at = datetime('now')
         WHERE id = ?
       `).run(plan.id, expiration, member.id);
       db.prepare(`
         INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, status, recorded_by)
-        VALUES (?, ?, NULL, 'renewal', ?, ?, ?, 'paid', ?)
-      `).run(nextPaymentId(), member.id, plan.id, request.amount, request.payment_method, req.user.sub);
+        VALUES (?, ?, NULL, ?, ?, ?, ?, 'paid', ?)
+      `).run(nextPaymentId(), member.id, paymentType, plan.id, request.amount, request.payment_method, req.user.sub);
       db.prepare(`
         UPDATE renewal_requests SET status = 'completed', reviewed_by = ?, updated_at = datetime('now') WHERE id = ?
       `).run(req.user.sub, request.id);

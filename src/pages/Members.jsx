@@ -83,7 +83,6 @@ export default function Members() {
             <option value="active">Active</option>
             <option value="expiring">Expiring Soon</option>
             <option value="expired">Expired</option>
-            <option value="suspended">Suspended</option>
             <option value="pending">Pending</option>
           </select>
         </div>

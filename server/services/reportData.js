@@ -28,6 +28,10 @@ export function getMembershipSummary() {
     FROM plans p LEFT JOIN members m ON m.plan_id = p.id AND m.archived_at IS NULL
     GROUP BY p.id ORDER BY count DESC
   `).all();
+  const withoutPlan = db.prepare(
+    "SELECT COUNT(*) AS count FROM members WHERE plan_id IS NULL AND archived_at IS NULL"
+  ).get().count;
+  if (withoutPlan) byPlan.push({ plan: "No plan selected", count: withoutPlan });
   const newThisMonth = db.prepare(
     "SELECT COUNT(*) AS c FROM members WHERE archived_at IS NULL AND date(joined_date) >= date('now','start of month')"
   ).get().c;
@@ -60,8 +64,8 @@ export function searchMembers({ query, status, plan, limit = 20 } = {}) {
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const rows = db.prepare(`
     SELECT m.id, m.first_name, m.last_name, m.email, m.phone, m.status,
-           p.name AS plan, m.start_date, m.expiration_date
-    FROM members m JOIN plans p ON p.id = m.plan_id
+           COALESCE(p.name, 'No plan selected') AS plan, m.start_date, m.expiration_date
+    FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     ${where}
     ORDER BY m.created_at DESC
     LIMIT ?
@@ -72,7 +76,7 @@ export function searchMembers({ query, status, plan, limit = 20 } = {}) {
 export function getMemberDetails(memberId) {
   const member = db.prepare(`
     SELECT m.*, p.name AS plan_name, p.price AS plan_price
-    FROM members m JOIN plans p ON p.id = m.plan_id
+    FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     WHERE m.id = ?
   `).get(memberId);
   if (!member) return { found: false, memberId };

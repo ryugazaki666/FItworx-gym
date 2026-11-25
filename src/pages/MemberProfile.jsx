@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Mail, Download, Save, X } from "lucide-react";
+import { Mail, Download, Save, X, Pencil } from "lucide-react";
 import { api } from "../lib/api";
 import { usePlans, useApi } from "../lib/hooks";
 import { initials, peso, formatDate, formatDateTime, daysRemaining } from "../lib/utils";
@@ -18,15 +18,20 @@ export default function MemberProfile() {
   const { openModal, closeModal } = useModal();
   const { data: plans } = usePlans();
   const { data: member, loading, error, refetch } = useApi(`/members/${id}`, [id]);
-  const { data: payments } = useApi(`/payments?memberId=${id}`, [id]);
+  const { data: payments, refetch: refetchPayments } = useApi(`/payments?memberId=${id}`, [id]);
   const { data: attendance } = useApi(`/attendance?memberId=${id}`, [id]);
   const [tab, setTab] = useState(0);
   const [qr, setQr] = useState(null);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(null);
+  const [addressParts, setAddressParts] = useState({ street: "", barangay: "", city: "" });
 
   useEffect(() => {
-    if (member) setForm(member);
+    if (member) {
+      setForm(member);
+      const parts = (member.address || "").split(",").map((part) => part.trim());
+      setAddressParts({ street: parts[0] || "", barangay: parts[1] || "", city: parts[2] || "" });
+    }
   }, [member]);
 
   useEffect(() => {
@@ -124,10 +129,13 @@ export default function MemberProfile() {
 
   async function saveEdit() {
     try {
+      const address = [addressParts.street.trim(), addressParts.barangay.trim(), addressParts.city.trim()]
+        .filter(Boolean)
+        .join(", ");
       await api.put(`/members/${m.id}`, {
         firstName: form.first_name, middleName: form.middle_name, lastName: form.last_name,
         dob: form.dob, gender: form.gender, phone: form.phone, email: form.email,
-        address: form.address, emergencyName: form.emergency_name,
+        address: address || null, emergencyName: form.emergency_name,
         emergencyRelationship: form.emergency_relationship, emergencyPhone: form.emergency_phone,
       });
       toast("Profile updated");
@@ -136,6 +144,41 @@ export default function MemberProfile() {
     } catch (err) {
       toast(err.message);
     }
+  }
+
+  function openEditPayment(payment) {
+    let status = ["paid", "pending"].includes(payment.status) ? payment.status : "pending";
+    openModal(
+      <div>
+        <h3 className="text-[16.5px] font-bold mb-3">Edit Transaction Status</h3>
+        <p className="text-ink-500 text-[13px] mb-4">{payment.id} · {m.name}</p>
+        <div>
+          <label className="block text-[12.8px] font-semibold text-ink-700 mb-1.5">Status</label>
+          <select className="input" defaultValue={status} onChange={(e) => (status = e.target.value)}>
+            <option value="paid">Paid</option>
+            <option value="pending">Pending</option>
+          </select>
+        </div>
+        <ModalActions>
+          <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+          <button
+            className="btn btn-accent"
+            onClick={async () => {
+              try {
+                await api.put(`/payments/${payment.id}`, { status });
+                closeModal();
+                toast("Transaction status updated");
+                refetchPayments();
+              } catch (err) {
+                toast(err.message);
+              }
+            }}
+          >
+            Save Changes
+          </button>
+        </ModalActions>
+      </div>
+    );
   }
 
   return (
@@ -199,7 +242,9 @@ export default function MemberProfile() {
               <EditField label="Last Name" value={form.last_name} onChange={(v) => setForm({ ...form, last_name: v })} />
               <EditField label="Phone" value={form.phone || ""} onChange={(v) => setForm({ ...form, phone: v })} />
               <EditField label="Email" value={form.email || ""} onChange={(v) => setForm({ ...form, email: v })} />
-              <EditField label="Address" value={form.address || ""} onChange={(v) => setForm({ ...form, address: v })} full />
+              <EditField label="Street" value={addressParts.street} onChange={(v) => setAddressParts({ ...addressParts, street: v })} />
+              <EditField label="Barangay" value={addressParts.barangay} onChange={(v) => setAddressParts({ ...addressParts, barangay: v })} />
+              <EditField label="City" value={addressParts.city} onChange={(v) => setAddressParts({ ...addressParts, city: v })} />
               <EditField label="Emergency Contact Name" value={form.emergency_name || ""} onChange={(v) => setForm({ ...form, emergency_name: v })} />
               <EditField label="Emergency Contact Phone" value={form.emergency_phone || ""} onChange={(v) => setForm({ ...form, emergency_phone: v })} />
               <div className="sm:col-span-2 flex gap-2 mt-1">
@@ -212,7 +257,7 @@ export default function MemberProfile() {
           {tab === 1 && (
             <div className="overflow-x-auto">
               <table>
-                <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead>
+                <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th>Status</th><th></th></tr></thead>
                 <tbody>
                   {(payments || []).map((p) => (
                     <tr key={p.id}>
@@ -221,10 +266,15 @@ export default function MemberProfile() {
                       <td className="font-semibold text-ink-900">{peso(p.amount)}</td>
                       <td>{p.method}</td>
                       <td><PayBadge status={p.status} /></td>
+                      <td>
+                        <button className="icon-btn-sm" title="Edit transaction status" onClick={() => openEditPayment(p)}>
+                          <Pencil size={14} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {(payments || []).length === 0 && (
-                    <tr><td colSpan={5} className="text-center text-ink-400 py-6">No payments recorded yet.</td></tr>
+                    <tr><td colSpan={6} className="text-center text-ink-400 py-6">No payments recorded yet.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -302,9 +352,9 @@ function InfoRow({ k, v }) {
   );
 }
 
-function EditField({ label, value, onChange, full }) {
+function EditField({ label, value, onChange }) {
   return (
-    <div className={full ? "sm:col-span-2" : ""}>
+    <div>
       <label className="block text-[12.8px] font-semibold text-ink-700 mb-1.5">{label}</label>
       <input className="input" value={value} onChange={(e) => onChange(e.target.value)} />
     </div>

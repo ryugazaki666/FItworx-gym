@@ -18,7 +18,7 @@ export default function Archive() {
 
   const combinedArchive = [
     ...(archivedMembers || []).map((member) => ({ ...member, kind: "member", title: member.name, idLabel: member.id, typeLabel: member.plan_name || "Membership" })),
-    ...(archivedWalkins || []).map((walkin) => ({ ...walkin, kind: "walkin", title: walkin.name, idLabel: walkin.id, typeLabel: walkin.service || "Day Pass" })),
+    ...(archivedWalkins || []).map((walkin) => ({ ...walkin, kind: "walkin", title: walkin.name, idLabel: walkin.id, typeLabel: "Walk-In" })),
   ];
 
   const entries = combinedArchive.filter((entry) => {

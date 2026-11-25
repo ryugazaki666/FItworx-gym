@@ -3,9 +3,17 @@
 // Uses Node's built-in node:sqlite (synchronous) driver — no mock/in-memory data.
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
-const databasePath = resolve(process.env.DATABASE_PATH || "server/data/fitworx.sqlite");
+const configuredDatabasePath = process.env.DATABASE_PATH?.trim();
+if (process.env.NODE_ENV === "production" && !configuredDatabasePath) {
+  throw new Error("DATABASE_PATH must point to persistent SQLite storage in production.");
+}
+if (process.env.NODE_ENV === "production" && !isAbsolute(configuredDatabasePath)) {
+  throw new Error("DATABASE_PATH must be an absolute path in production.");
+}
+
+const databasePath = resolve(configuredDatabasePath || "server/data/fitworx.sqlite");
 mkdirSync(dirname(databasePath), { recursive: true });
 
 export const db = new DatabaseSync(databasePath);
@@ -48,7 +56,7 @@ db.exec(`
     emergency_name TEXT,
     emergency_relationship TEXT,
     emergency_phone TEXT,
-    plan_id INTEGER NOT NULL REFERENCES plans(id),
+    plan_id INTEGER REFERENCES plans(id),
     status TEXT NOT NULL CHECK (status IN ('active','expiring','expired','suspended','pending')) DEFAULT 'active',
     start_date TEXT NOT NULL,
     expiration_date TEXT NOT NULL,
@@ -125,6 +133,16 @@ db.exec(`
     reviewed_by INTEGER REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS member_password_resets (
+    id TEXT PRIMARY KEY,
+    member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    used_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -135,6 +153,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_payments_paid_at ON payments(paid_at);
   CREATE INDEX IF NOT EXISTS idx_attendance_checkin ON attendance(check_in);
   CREATE INDEX IF NOT EXISTS idx_walkins_date ON walkins(visit_date);
+  CREATE INDEX IF NOT EXISTS idx_member_password_resets_member_created
+    ON member_password_resets(member_id, created_at);
 `);
 
 // Retire the seeded one-day plan while keeping existing member history intact.
@@ -164,6 +184,64 @@ try {
   db.exec("ALTER TABLE walkins ADD COLUMN archived_at TEXT");
 } catch (error) {
   if (!String(error.message).includes("duplicate column name")) throw error;
+}
+
+const memberPlanColumn = db.prepare("PRAGMA table_info(members)").all()
+  .find((column) => column.name === "plan_id");
+if (memberPlanColumn?.notnull) {
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    db.exec(`
+      CREATE TABLE members_new (
+        id TEXT PRIMARY KEY,
+        first_name TEXT NOT NULL,
+        middle_name TEXT,
+        last_name TEXT NOT NULL,
+        dob TEXT,
+        gender TEXT,
+        phone TEXT,
+        email TEXT UNIQUE COLLATE NOCASE,
+        address TEXT,
+        emergency_name TEXT,
+        emergency_relationship TEXT,
+        emergency_phone TEXT,
+        plan_id INTEGER REFERENCES plans(id),
+        status TEXT NOT NULL CHECK (status IN ('active','expiring','expired','suspended','pending')) DEFAULT 'active',
+        start_date TEXT NOT NULL,
+        expiration_date TEXT NOT NULL,
+        joined_date TEXT NOT NULL DEFAULT (date('now')),
+        qr_token TEXT NOT NULL UNIQUE,
+        portal_password_hash TEXT,
+        created_by INTEGER REFERENCES users(id),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        archived_at TEXT
+      );
+      INSERT INTO members_new (
+        id, first_name, middle_name, last_name, dob, gender, phone, email, address,
+        emergency_name, emergency_relationship, emergency_phone, plan_id, status,
+        start_date, expiration_date, joined_date, qr_token, portal_password_hash,
+        created_by, created_at, updated_at, archived_at
+      )
+      SELECT
+        id, first_name, middle_name, last_name, dob, gender, phone, email, address,
+        emergency_name, emergency_relationship, emergency_phone, plan_id, status,
+        start_date, expiration_date, joined_date, qr_token, portal_password_hash,
+        created_by, created_at, updated_at, archived_at
+      FROM members;
+      DROP TABLE members;
+      ALTER TABLE members_new RENAME TO members;
+      CREATE INDEX idx_members_status ON members(status);
+      CREATE INDEX idx_members_exp ON members(expiration_date);
+      COMMIT;
+    `);
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
 export function nextMemberId() {
@@ -201,9 +279,13 @@ export function computeStatus(expirationDate, currentStatus) {
 }
 
 export function refreshMemberStatuses() {
-  const members = db.prepare("SELECT id, expiration_date, status FROM members").all();
+  const members = db.prepare("SELECT id, expiration_date, status, plan_id FROM members").all();
   const update = db.prepare("UPDATE members SET status = ?, updated_at = datetime('now') WHERE id = ?");
   for (const m of members) {
+    if (m.plan_id === null) {
+      if (m.status !== "pending") update.run("pending", m.id);
+      continue;
+    }
     const next = computeStatus(m.expiration_date, m.status);
     if (next !== m.status) update.run(next, m.id);
   }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search } from "lucide-react";
+import { Search, Pencil } from "lucide-react";
 import { usePayments, useApi } from "../lib/hooks";
 import { api, downloadFile } from "../lib/api";
 import { peso, formatDateTime } from "../lib/utils";
@@ -75,6 +75,41 @@ export default function Payments() {
     );
   }
 
+  function openEditPayment(payment) {
+    let status = ["paid", "pending"].includes(payment.status) ? payment.status : "pending";
+    openModal(
+      <div>
+        <h3 className="text-[16.5px] font-bold mb-3">Edit Transaction Status</h3>
+        <p className="text-ink-500 text-[13px] mb-4">{payment.id} · {payment.payer_name}</p>
+        <div>
+          <label className="block text-[12.8px] font-semibold text-ink-700 mb-1.5">Status</label>
+          <select className="input" defaultValue={status} onChange={(e) => (status = e.target.value)}>
+            <option value="paid">Paid</option>
+            <option value="pending">Pending</option>
+          </select>
+        </div>
+        <ModalActions>
+          <button className="btn btn-secondary" onClick={closeModal}>Cancel</button>
+          <button
+            className="btn btn-accent"
+            onClick={async () => {
+              try {
+                await api.put(`/payments/${payment.id}`, { status });
+                closeModal();
+                toast("Transaction status updated");
+                refetch();
+              } catch (err) {
+                toast(err.message);
+              }
+            }}
+          >
+            Save Changes
+          </button>
+        </ModalActions>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-end justify-between gap-4 flex-wrap mb-6">
@@ -107,7 +142,7 @@ export default function Payments() {
           </select>
           <select className="input !w-auto text-[13px]" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All Statuses</option>
-            <option value="paid">Paid</option><option value="pending">Pending</option><option value="failed">Failed</option>
+            <option value="paid">Paid</option><option value="pending">Pending</option>
           </select>
         </div>
 
@@ -117,7 +152,7 @@ export default function Payments() {
         {!loading && !error && (
           <div className="overflow-x-auto">
             <table>
-              <thead><tr><th>Transaction ID</th><th>Payer</th><th>Type</th><th>Amount</th><th>Method</th><th>Date</th><th>Status</th></tr></thead>
+              <thead><tr><th>Transaction ID</th><th>Payer</th><th>Type</th><th>Amount</th><th>Method</th><th>Date</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {payments.map((p) => (
                   <tr key={p.id}>
@@ -127,11 +162,25 @@ export default function Payments() {
                     <td className="font-semibold text-ink-900">{peso(p.amount)}</td>
                     <td>{p.method}</td>
                     <td>{formatDateTime(p.paid_at)}</td>
-                    <td><PayBadge status={p.status} /></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="bg-transparent border-none p-0 cursor-pointer"
+                        title="Edit transaction status"
+                        onClick={() => openEditPayment(p)}
+                      >
+                        <PayBadge status={p.status} />
+                      </button>
+                    </td>
+                    <td>
+                      <button className="icon-btn-sm" title="Edit transaction status" onClick={() => openEditPayment(p)}>
+                        <Pencil size={14} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {payments.length === 0 && (
-                  <tr><td colSpan={7} className="text-center text-ink-400 py-8">No transactions match your filters.</td></tr>
+                  <tr><td colSpan={8} className="text-center text-ink-400 py-8">No transactions match your filters.</td></tr>
                 )}
               </tbody>
             </table>

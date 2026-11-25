@@ -78,6 +78,12 @@ router.post("/checkin", (req, res) => {
       member: { id: member.id, name: `${member.first_name} ${member.last_name}`, status: member.status },
     });
   }
+  if (member.plan_id === null) {
+    return res.status(409).json({
+      error: `${member.first_name} ${member.last_name} has not selected a membership plan. Check-in was not recorded.`,
+      member: { id: member.id, name: `${member.first_name} ${member.last_name}`, status: member.status },
+    });
+  }
 
   const openVisit = db.prepare(
     "SELECT id FROM attendance WHERE member_id = ? AND check_out IS NULL"

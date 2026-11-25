@@ -30,7 +30,9 @@ export default function Expiring({ title, subtitle }) {
   async function reviewRenewal(request, action) {
     try {
       await api.patch(`/members/renewal-requests/${request.id}`, { action });
-      toast(action === "complete" ? `${request.name}'s renewal completed` : `${request.name}'s request declined`);
+      toast(action === "complete"
+        ? `${request.name}'s ${request.is_initial_membership ? "membership activated" : "renewal completed"}`
+        : `${request.name}'s request declined`);
       refetchAll();
     } catch (err) {
       toast(err.message);
@@ -167,7 +169,7 @@ export default function Expiring({ title, subtitle }) {
       {title === "Renewal Management" && (
         <div className="card mt-5">
           <div className="p-4 border-b border-line-soft">
-            <h2 className="text-[16px] font-bold">Member renewal requests</h2>
+            <h2 className="text-[16px] font-bold">Membership requests</h2>
             <p className="text-ink-500 text-[13px] mt-1">Confirm payment at reception before completing a renewal.</p>
           </div>
           {(renewalRequests || []).length === 0 ? (
@@ -184,7 +186,9 @@ export default function Expiring({ title, subtitle }) {
                   </div>
                   <div className="flex gap-2 w-full sm:w-auto">
                     <button className="btn btn-secondary btn-sm flex-1 sm:flex-none" onClick={() => reviewRenewal(request, "reject")}>Decline</button>
-                    <button className="btn btn-accent btn-sm flex-1 sm:flex-none" onClick={() => reviewRenewal(request, "complete")}>Confirm payment &amp; renew</button>
+                    <button className="btn btn-accent btn-sm flex-1 sm:flex-none" onClick={() => reviewRenewal(request, "complete")}>
+                      {request.is_initial_membership ? "Confirm payment & activate" : "Confirm payment & renew"}
+                    </button>
                   </div>
                 </div>
               ))}

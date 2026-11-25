@@ -44,9 +44,9 @@ router.get("/export/:type", (req, res) => {
   let rows = [];
   if (type === "membership") {
     rows = db.prepare(`
-      SELECT m.id, m.first_name, m.last_name, m.email, m.phone, p.name AS plan,
+      SELECT m.id, m.first_name, m.last_name, m.email, m.phone, COALESCE(p.name, 'No plan selected') AS plan,
              m.status, m.start_date, m.expiration_date
-      FROM members m JOIN plans p ON p.id = m.plan_id
+      FROM members m LEFT JOIN plans p ON p.id = m.plan_id
             WHERE m.archived_at IS NULL
       ORDER BY m.id
     `).all();
