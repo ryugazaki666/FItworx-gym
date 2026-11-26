@@ -2,8 +2,9 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import "./db.js"; // ensures schema exists before routes load
-import { refreshMemberStatuses } from "./db.js";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { databaseRequestContext, initializeDatabase, refreshMemberStatuses } from "./db.js";
 import { requireAuth, requireStaff } from "./auth.js";
 import authRoutes from "./routes/auth.js";
 import memberRoutes from "./routes/members.js";
@@ -18,6 +19,7 @@ import memberPortalRoutes from "./routes/memberPortal.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const frontendDist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist");
 const allowedOrigins = process.env.APP_ORIGINS
   ?.split(",")
   .map((origin) => origin.trim())
@@ -29,11 +31,15 @@ if (process.env.NODE_ENV === "production" && !allowedOrigins?.length) {
 
 app.use(cors({ origin: allowedOrigins?.length ? allowedOrigins : true }));
 app.use(express.json({ limit: "1mb" }));
+app.use(databaseRequestContext);
 
 // Keep member statuses (active/expiring/expired) accurate on every boot
 // and periodically, without requiring a separate cron process.
-refreshMemberStatuses();
-setInterval(refreshMemberStatuses, 60 * 60 * 1000);
+await initializeDatabase();
+await (refreshMemberStatuses());
+setInterval(() => {
+  refreshMemberStatuses().catch((error) => console.error("Could not refresh member statuses:", error));
+}, 60 * 60 * 1000);
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -53,6 +59,13 @@ app.use("/api/ai", aiRoutes);
 app.use("/api/settings", settingsRoutes);
 
 app.use("/api", (req, res) => res.status(404).json({ error: "Not found" }));
+
+app.use(express.static(frontendDist));
+app.get("*", (req, res, next) => {
+  res.sendFile(resolve(frontendDist, "index.html"), (error) => {
+    if (error) next(error);
+  });
+});
 
 // Centralized error handler so unexpected exceptions return JSON, not HTML.
 app.use((err, req, res, next) => {

@@ -6,6 +6,7 @@ import { requireAuth, requireAdmin } from "../auth.js";
 import { generateMemberQrDataUrl } from "../services/qr.js";
 import { sendMail, membershipInfoEmail, welcomeEmail, renewalConfirmationEmail, hasSmtpConfig, buildMailtoUrl } from "../services/email.js";
 import { isAllowedPaymentMethod, PAYMENT_METHOD_ERROR } from "../services/paymentMethods.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 const router = Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -32,16 +33,16 @@ function normalizeNamePart(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 }
 
-function hasDuplicateMemberName(firstName, middleName, lastName) {
+async function hasDuplicateMemberName(firstName, middleName, lastName) {
   const first = normalizeNamePart(firstName);
   const middle = normalizeNamePart(middleName);
   const last = normalizeNamePart(lastName);
-  const candidates = db.prepare(`
+  const candidates = await (db.prepare(`
     SELECT first_name, middle_name, last_name
     FROM members
     WHERE lower(trim(first_name)) = lower(trim(?))
       AND lower(trim(last_name)) = lower(trim(?))
-  `).all(firstName.trim(), lastName.trim());
+  `).all(firstName.trim(), lastName.trim()));
 
   return candidates.some((member) =>
     normalizeNamePart(member.first_name) === first
@@ -50,9 +51,9 @@ function hasDuplicateMemberName(firstName, middleName, lastName) {
   );
 }
 
-function fullMember(row) {
+async function fullMember(row) {
   if (!row) return null;
-  const plan = db.prepare("SELECT * FROM plans WHERE id = ?").get(row.plan_id);
+  const plan = await (db.prepare("SELECT * FROM plans WHERE id = ?").get(row.plan_id));
   return { ...row, name: `${row.first_name} ${row.last_name}`, plan };
 }
 
@@ -64,8 +65,8 @@ function addDays(isoDate, days) {
 
 router.use(requireAuth);
 
-router.get("/", (req, res) => {
-  refreshMemberStatuses();
+router.get("/", asyncHandler(async (req, res) => {
+  await (refreshMemberStatuses());
   const { q, status, plan } = req.query;
   const clauses = ["m.archived_at IS NULL"];
   const params = [];
@@ -77,27 +78,27 @@ router.get("/", (req, res) => {
   if (status) { clauses.push("m.status = ?"); params.push(status); }
   if (plan) { clauses.push("p.name = ?"); params.push(plan); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db.prepare(`
+  const rows = await (db.prepare(`
     SELECT m.*, COALESCE(p.name, 'No plan selected') AS plan_name, p.price AS plan_price
     FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     ${where}
     ORDER BY CAST(SUBSTR(m.id, 5) AS INTEGER) ASC
-  `).all(...params);
+  `).all(...params));
   res.json(rows.map((r) => ({ ...r, name: `${r.first_name} ${r.last_name}` })));
-});
+}));
 
-router.get("/archive", (req, res) => {
-  const rows = db.prepare(`
+router.get("/archive", asyncHandler(async (req, res) => {
+  const rows = await (db.prepare(`
     SELECT m.*, COALESCE(p.name, 'No plan selected') AS plan_name, p.price AS plan_price
     FROM members m LEFT JOIN plans p ON p.id = m.plan_id
     WHERE m.archived_at IS NOT NULL
     ORDER BY m.archived_at DESC, CAST(SUBSTR(m.id, 5) AS INTEGER) ASC
-  `).all();
+  `).all());
   res.json(rows.map((r) => ({ ...r, name: `${r.first_name} ${r.last_name}` })));
-});
+}));
 
-router.get("/renewal-requests", (req, res) => {
-  const rows = db.prepare(`
+router.get("/renewal-requests", asyncHandler(async (req, res) => {
+  const rows = await (db.prepare(`
     SELECT r.*, m.first_name, m.last_name, m.email, m.phone,
       (m.plan_id IS NULL) AS is_initial_membership,
       p.name AS plan_name, p.duration_days AS plan_duration_days
@@ -106,63 +107,63 @@ router.get("/renewal-requests", (req, res) => {
     JOIN plans p ON p.id = r.plan_id
     WHERE r.status = 'pending'
     ORDER BY r.created_at ASC
-  `).all();
+  `).all());
   res.json(rows.map((row) => ({ ...row, name: `${row.first_name} ${row.last_name}` })));
-});
+}));
 
-router.patch("/renewal-requests/:id", (req, res) => {
+router.patch("/renewal-requests/:id", asyncHandler(async (req, res) => {
   const { action } = req.body || {};
   if (!['complete', 'reject'].includes(action)) {
     return res.status(400).json({ error: "Action must be 'complete' or 'reject'." });
   }
-  const request = db.prepare("SELECT * FROM renewal_requests WHERE id = ? AND status = 'pending'").get(req.params.id);
+  const request = await (db.prepare("SELECT * FROM renewal_requests WHERE id = ? AND status = 'pending'").get(req.params.id));
   if (!request) return res.status(404).json({ error: "Pending renewal request not found." });
-  const member = db.prepare("SELECT * FROM members WHERE id = ? AND archived_at IS NULL").get(request.member_id);
+  const member = await (db.prepare("SELECT * FROM members WHERE id = ? AND archived_at IS NULL").get(request.member_id));
   if (!member) return res.status(404).json({ error: "Member not found." });
 
-  db.exec("BEGIN IMMEDIATE");
+  await (db.exec("BEGIN IMMEDIATE"));
   try {
     if (action === "complete") {
-      const plan = db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(request.plan_id);
+      const plan = await (db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(request.plan_id));
       if (!plan) {
-        db.exec("ROLLBACK");
+        await (db.exec("ROLLBACK"));
         return res.status(409).json({ error: "The requested membership plan is no longer active." });
       }
       const today = new Date().toISOString().slice(0, 10);
       const base = !member.plan_id || member.expiration_date < today ? today : member.expiration_date;
       const expiration = addDays(base, plan.duration_days);
       const paymentType = member.plan_id ? "renewal" : "membership";
-      db.prepare(`
+      await (db.prepare(`
         UPDATE members SET plan_id = ?, expiration_date = ?, status = 'active', updated_at = datetime('now')
         WHERE id = ?
-      `).run(plan.id, expiration, member.id);
-      db.prepare(`
+      `).run(plan.id, expiration, member.id));
+      await (db.prepare(`
         INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, status, recorded_by)
         VALUES (?, ?, NULL, ?, ?, ?, ?, 'paid', ?)
-      `).run(nextPaymentId(), member.id, paymentType, plan.id, request.amount, request.payment_method, req.user.sub);
-      db.prepare(`
+      `).run(await (nextPaymentId()), member.id, paymentType, plan.id, request.amount, request.payment_method, req.user.sub));
+      await (db.prepare(`
         UPDATE renewal_requests SET status = 'completed', reviewed_by = ?, updated_at = datetime('now') WHERE id = ?
-      `).run(req.user.sub, request.id);
+      `).run(req.user.sub, request.id));
     } else {
-      db.prepare(`
+      await (db.prepare(`
         UPDATE renewal_requests SET status = 'rejected', reviewed_by = ?, updated_at = datetime('now') WHERE id = ?
-      `).run(req.user.sub, request.id);
+      `).run(req.user.sub, request.id));
     }
-    db.exec("COMMIT");
+    await (db.exec("COMMIT"));
   } catch (error) {
-    db.exec("ROLLBACK");
+    await (db.exec("ROLLBACK"));
     return res.status(500).json({ error: error.message });
   }
   res.json({ ok: true, status: action === "complete" ? "completed" : "rejected" });
-});
+}));
 
-router.get("/:id", (req, res) => {
-  const row = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
+router.get("/:id", asyncHandler(async (req, res) => {
+  const row = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
   if (!row) return res.status(404).json({ error: "Member not found." });
-  res.json(fullMember(row));
-});
+  res.json(await fullMember(row));
+}));
 
-router.post("/", (req, res) => {
+router.post("/", asyncHandler(async (req, res) => {
   const b = req.body || {};
   const required = ["firstName", "lastName", "email", "planId", "startDate"];
   const missing = required.filter((k) => !b[k]);
@@ -172,7 +173,7 @@ router.post("/", (req, res) => {
   if (!EMAIL_RE.test(b.email)) {
     return res.status(400).json({ error: "Enter a valid email address." });
   }
-  if (hasDuplicateMemberName(b.firstName, b.middleName, b.lastName)) {
+  if (await hasDuplicateMemberName(b.firstName, b.middleName, b.lastName)) {
     return res.status(409).json({ error: "A member with the same full name is already registered." });
   }
   if (b.paymentMethod && !isAllowedPaymentMethod(b.paymentMethod)) {
@@ -180,18 +181,18 @@ router.post("/", (req, res) => {
   }
   const dobError = birthDateError(b.dob);
   if (dobError) return res.status(400).json({ error: dobError });
-  const plan = db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(b.planId);
+  const plan = await (db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(b.planId));
   if (!plan) return res.status(400).json({ error: "Selected membership plan does not exist or is inactive." });
 
-  const existing = db.prepare("SELECT id FROM members WHERE email = ? COLLATE NOCASE").get(b.email.trim());
+  const existing = await (db.prepare("SELECT id FROM members WHERE email = ? COLLATE NOCASE").get(b.email.trim()));
   if (existing) return res.status(409).json({ error: "That email address is already registered to another member." });
 
-  const id = nextMemberId();
+  const id = await (nextMemberId());
   const expiration = addDays(b.startDate, plan.duration_days);
   const qrToken = randomUUID();
 
   try {
-    db.prepare(`
+    await (db.prepare(`
       INSERT INTO members (
         id, first_name, middle_name, last_name, dob, gender, phone, email, address,
         emergency_name, emergency_relationship, emergency_phone,
@@ -202,33 +203,33 @@ router.post("/", (req, res) => {
       b.dob || null, b.gender || null, b.phone || null, b.email.trim(), b.address || null,
       b.emergencyName || null, b.emergencyRelationship || null, b.emergencyPhone || null,
       plan.id, b.startDate, expiration, qrToken, req.user.sub
-    );
+    ));
 
     if (b.paymentStatus !== "pending") {
-      db.prepare(`
+      await (db.prepare(`
         INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, reference_number, status, recorded_by)
         VALUES (?, ?, NULL, 'membership', ?, ?, ?, ?, ?, ?)
       `).run(
-        nextPaymentId(), id, plan.id, plan.price,
+        await (nextPaymentId()), id, plan.id, plan.price,
         b.paymentMethod || "Cash", b.referenceNumber || null,
         b.paymentStatus === "pending" ? "pending" : "paid", req.user.sub
-      );
+      ));
     }
 
-    db.prepare(`
+    await (db.prepare(`
       INSERT INTO attendance (member_id, walkin_id, check_in, source)
       VALUES (?, NULL, datetime('now'), 'manual')
-    `).run(id);
+    `).run(id));
 
-    const created = db.prepare("SELECT * FROM members WHERE id = ?").get(id);
-    res.status(201).json(fullMember(created));
+    const created = await (db.prepare("SELECT * FROM members WHERE id = ?").get(id));
+    res.status(201).json(await fullMember(created));
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
-});
+}));
 
-router.put("/:id", (req, res) => {
-  const existing = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
+router.put("/:id", asyncHandler(async (req, res) => {
+  const existing = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
   if (!existing) return res.status(404).json({ error: "Member not found." });
   const b = req.body || {};
   if (b.email && !EMAIL_RE.test(b.email)) {
@@ -253,7 +254,7 @@ router.put("/:id", (req, res) => {
     status: b.status ?? existing.status,
   };
   try {
-    db.prepare(`
+    await (db.prepare(`
       UPDATE members SET first_name=?, middle_name=?, last_name=?, dob=?, gender=?, phone=?, email=?,
         address=?, emergency_name=?, emergency_relationship=?, emergency_phone=?, status=?, updated_at=datetime('now')
       WHERE id = ?
@@ -261,79 +262,79 @@ router.put("/:id", (req, res) => {
       fields.first_name, fields.middle_name, fields.last_name, fields.dob, fields.gender,
       fields.phone, fields.email, fields.address, fields.emergency_name,
       fields.emergency_relationship, fields.emergency_phone, fields.status, req.params.id
-    );
-    const updated = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
-    res.json(fullMember(updated));
+    ));
+    const updated = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
+    res.json(await fullMember(updated));
   } catch (error) {
     if (String(error.message).includes("UNIQUE")) {
       return res.status(409).json({ error: "That email address is already registered to another member." });
     }
     res.status(400).json({ error: error.message });
   }
-});
+}));
 
 // Only admins may archive a member profile; related records remain linked.
-router.delete("/:id", requireAuth, (req, res) => {
-  const info = db.prepare("UPDATE members SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND archived_at IS NULL").run(req.params.id);
+router.delete("/:id", requireAuth, asyncHandler(async (req, res) => {
+  const info = await (db.prepare("UPDATE members SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND archived_at IS NULL").run(req.params.id));
   if (!info.changes) return res.status(404).json({ error: "Member not found." });
   res.json({ ok: true, archived: true });
-});
+}));
 
 // Permanently delete only members that have already been archived.
-router.delete("/:id/permanent", requireAuth, (req, res) => {
-  const member = db.prepare("SELECT id FROM members WHERE id = ? AND archived_at IS NOT NULL").get(req.params.id);
+router.delete("/:id/permanent", requireAuth, asyncHandler(async (req, res) => {
+  const member = await (db.prepare("SELECT id FROM members WHERE id = ? AND archived_at IS NOT NULL").get(req.params.id));
   if (!member) return res.status(404).json({ error: "Archived member not found." });
 
-  db.exec("BEGIN");
+  await (db.exec("BEGIN"));
   try {
-    db.prepare("DELETE FROM attendance WHERE member_id = ?").run(member.id);
-    db.prepare("DELETE FROM payments WHERE member_id = ?").run(member.id);
-    db.prepare("DELETE FROM members WHERE id = ? AND archived_at IS NOT NULL").run(member.id);
-    db.exec("COMMIT");
+    await (db.prepare("DELETE FROM attendance WHERE member_id = ?").run(member.id));
+    await (db.prepare("DELETE FROM payments WHERE member_id = ?").run(member.id));
+    await (db.prepare("DELETE FROM members WHERE id = ? AND archived_at IS NOT NULL").run(member.id));
+    await (db.exec("COMMIT"));
     res.json({ ok: true, deleted: true });
   } catch (error) {
-    db.exec("ROLLBACK");
+    await (db.exec("ROLLBACK"));
     res.status(500).json({ error: error.message });
   }
-});
+}));
 
-router.post("/:id/restore", requireAuth, (req, res) => {
-  const info = db.prepare("UPDATE members SET archived_at = NULL, updated_at = datetime('now') WHERE id = ? AND archived_at IS NOT NULL").run(req.params.id);
+router.post("/:id/restore", requireAuth, asyncHandler(async (req, res) => {
+  const info = await (db.prepare("UPDATE members SET archived_at = NULL, updated_at = datetime('now') WHERE id = ? AND archived_at IS NOT NULL").run(req.params.id));
   if (!info.changes) return res.status(404).json({ error: "Archived member not found." });
-  const restored = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
-  res.json(fullMember(restored));
-});
+  const restored = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
+  res.json(await fullMember(restored));
+}));
 
-router.post("/:id/renew", (req, res) => {
-  const member = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
+router.post("/:id/renew", asyncHandler(async (req, res) => {
+  const member = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
   if (!member) return res.status(404).json({ error: "Member not found." });
   if (member.archived_at) return res.status(409).json({ error: "Archived members must be restored before renewal." });
   const { planId, paymentMethod, referenceNumber } = req.body || {};
   if (paymentMethod && !isAllowedPaymentMethod(paymentMethod)) {
     return res.status(400).json({ error: PAYMENT_METHOD_ERROR });
   }
-  const plan = db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(planId || member.plan_id);
+  const plan = await (db.prepare("SELECT * FROM plans WHERE id = ? AND active = 1").get(planId || member.plan_id));
   if (!plan) return res.status(400).json({ error: "Selected membership plan does not exist or is inactive." });
 
   const base = member.status === "expired" ? new Date().toISOString().slice(0, 10) : member.expiration_date;
   const newExpiration = addDays(base, plan.duration_days);
 
-  db.prepare(`
+  await (db.prepare(`
     UPDATE members SET plan_id = ?, expiration_date = ?, status = 'active', updated_at = datetime('now')
     WHERE id = ?
-  `).run(plan.id, newExpiration, member.id);
+  `).run(plan.id, newExpiration, member.id));
 
-  db.prepare(`
+  await (db.prepare(`
     INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, reference_number, status, recorded_by)
     VALUES (?, ?, NULL, 'renewal', ?, ?, ?, ?, 'paid', ?)
-  `).run(nextPaymentId(), member.id, plan.id, plan.price, paymentMethod || "Cash", referenceNumber || null, req.user.sub);
+  `).run(await (nextPaymentId()), member.id, plan.id, plan.price, paymentMethod || "Cash", referenceNumber || null, req.user.sub));
 
-  const updated = db.prepare("SELECT * FROM members WHERE id = ?").get(member.id);
-  res.json(fullMember(updated));
-});
+  const updated = await (db.prepare("SELECT * FROM members WHERE id = ?").get(member.id));
+  res.json(await fullMember(updated));
+}));
 
-router.get("/:id/qr", async (req, res) => {
-  const member = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
+router.get("/:id/qr", asyncHandler(async (req, res) => {
+  const member = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
   if (!member) return res.status(404).json({ error: "Member not found." });
   try {
     const dataUrl = await generateMemberQrDataUrl(member);
@@ -341,13 +342,13 @@ router.get("/:id/qr", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-});
+}));
 
-router.post("/:id/email", async (req, res) => {
-  const member = db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id);
+router.post("/:id/email", asyncHandler(async (req, res) => {
+  const member = await (db.prepare("SELECT * FROM members WHERE id = ?").get(req.params.id));
   if (!member) return res.status(404).json({ error: "Member not found." });
   if (!member.email) return res.status(400).json({ error: "This member does not have a registered email address." });
-  const plan = db.prepare("SELECT * FROM plans WHERE id = ?").get(member.plan_id);
+  const plan = await (db.prepare("SELECT * FROM plans WHERE id = ?").get(member.plan_id));
   try {
     const kind = req.body?.kind || "info";
     const template =
@@ -369,6 +370,6 @@ router.post("/:id/email", async (req, res) => {
   } catch (error) {
     res.status(502).json({ error: error.message });
   }
-});
+}));
 
 export default router;

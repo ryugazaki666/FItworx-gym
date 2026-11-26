@@ -1,7 +1,7 @@
 # FitWorx — Web-Based Gym Management System with AI-Integrated Natural Language Reporting
 
 A full-stack gym management system built for an undergraduate thesis. Every feature described
-below is implemented end-to-end against a real SQLite database — there is no mock or placeholder
+below is implemented end-to-end against a real MySQL database — there is no mock or placeholder
 data in the running application (only the optional seed script, which clearly labels itself as
 demo/testing data).
 
@@ -12,7 +12,7 @@ demo/testing data).
 | Frontend | React 18 + Vite + Tailwind |
 | Member mobile portal | Responsive browser-based membership registration, pass, records, and renewals |
 | Backend | Node.js + Express |
-| Database | SQLite (via Node's built-in `node:sqlite`), real foreign-key relationships |
+| Database | MySQL (via `mysql2`), real foreign-key relationships |
 | Auth | JWT sessions, bcrypt-hashed passwords, admin/staff roles |
 | QR Code | Real generation (`qrcode`) and real camera scanning (`html5-qrcode`), verified against a per-member secret token stored in the database |
 | Email | Real SMTP delivery via `nodemailer` (no simulated sending) |
@@ -27,35 +27,43 @@ cp .env.example .env
 
 Open `.env` and fill in:
 
-1. **`JWT_SECRET`** — required. Generate one with:
+1. **`MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_DATABASE`** — required.
+   Create a MySQL 8.0+ database and user with your provider, then copy its connection details into
+   `.env`. Never commit the password or send it in chat.
+2. **`JWT_SECRET`** — required. Generate one with:
    ```bash
    node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
    ```
-2. **`SMTP_*`** — required for the email feature to actually send mail. Any real SMTP provider
+3. **`SMTP_*`** — required for the email feature to actually send mail. Any real SMTP provider
    works (Gmail with an App Password, Outlook, SendGrid, Mailgun, your school's SMTP relay,
    etc.). Without these set, every other feature still works — only email sending will return a
    clear configuration error instead of pretending to succeed.
-3. **`GEMINI_API_KEY`** — required for the AI Reporting Assistant. Create one at
+4. **`GEMINI_API_KEY`** — required for the AI Reporting Assistant. Create one at
    https://aistudio.google.com/apikey. Without it, every other feature still works —
    only the AI Reporting Assistant page will show a "not configured" message instead of a fake
    answer.
 
-## 2. Create and seed the database
+## 2. Create or migrate the database
+
+The server creates the MySQL tables automatically when it starts. To migrate the existing SQLite
+records, keep the original `fitworx.sqlite` file as a backup, place a copy where the Node process
+can read it, set `SQLITE_SOURCE_PATH` if it is not at `server/data/fitworx.sqlite`, then run:
 
 ```bash
-npm run seed
+npm run db:migrate-sqlite
 ```
 
-This creates `server/data/fitworx.sqlite` and populates it with:
+The importer preserves IDs and relationships, refuses to import into tables that already contain
+records, and verifies row counts after import. It reads but does not modify the SQLite source.
+Run it before `npm run bootstrap:admin` or `npm run seed`.
+
+For a fresh demo database only, run `npm run seed`. This inserts:
 - Two staff accounts for testing: `admin@fitworx.gym` / `Admin123!` (administrator) and
   `staff@fitworx.gym` / `Staff123!` (staff)
-- Five membership plans
+- Four membership plans
 - Eight sample members, three sample walk-in customers, and matching payment/attendance history
 
-You can delete `server/data/fitworx.sqlite` and re-run `npm run seed` at any time to reset to a
-clean demo state. In a real gym deployment, you would run `npm run seed` once (to create the
-staff accounts and plans) and then register real members through the app instead of using the
-sample data.
+Do not run the seed script on production data; it creates known demo accounts and sample records.
 
 ## 3. Run the system
 
@@ -118,10 +126,8 @@ membership passes, records, and renewals.
 
 ### Deploy publicly with Cloudflare Pages
 
-The current backend is Express and writes to a SQLite file, so it cannot be deployed as a
-static Pages site by itself. Use Cloudflare Pages for the frontend and a Node.js host with a
-persistent disk for the API/database. This keeps the existing backend intact while making the
-site available over HTTPS from any device.
+The backend is Express, so it cannot be deployed as a static Pages site by itself. Use Cloudflare
+Pages for the frontend and a Node.js host plus a MySQL database for the API.
 
 1. Deploy this repository to Cloudflare Pages using Git integration:
    - Build command: `npm ci && npm run build`
@@ -129,15 +135,14 @@ site available over HTTPS from any device.
    - Add the build environment variable `VITE_API_BASE_URL`, set to the API's HTTPS URL ending
      in `/api` (for example, `https://api.example.com/api`).
    - Optionally attach a custom domain such as `app.example.com`.
-2. Deploy the same repository to a Node.js host that supports Node.js 22.5+ and persistent
-   disks. Set the start command to `npm run server` and the health-check path to
-   `/api/health`. Mount the persistent disk, then set `DATABASE_PATH` to a file on that disk
-   (for example, `/var/data/fitworx.sqlite`). Keep the API process on one instance when using
-   SQLite; multiple instances would each have separate local database files.
+2. Deploy the same repository to a Node.js host that supports Node.js 22.5+ and set the start
+   command to `npm run server` and the health-check path to `/api/health`.
 3. Configure the API host's environment variables:
    - `NODE_ENV=production`
    - `APP_ORIGINS=https://app.example.com` (include the `https://<project>.pages.dev` origin
      too if you will also use the Pages URL)
+   - `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, and `MYSQL_PASSWORD` from your
+     MySQL provider
    - `JWT_SECRET` to a newly generated, long random value
    - `GEMINI_API_KEY`, `GEMINI_MODEL`, and `SMTP_*` if those features are needed
    - `PORT` is normally provided by the host
@@ -156,28 +161,29 @@ site available over HTTPS from any device.
 
 ### Deploy publicly on Hostinger Business/Unlimited
 
-Hostinger's managed Node.js deployment rebuilds each release into a versioned `hbuilds` folder.
-Do not store SQLite data in the app checkout, `hbuilds`, or `public_html`; those locations are
-replaced during deployment. Keep SQLite by configuring `DATABASE_PATH` to an absolute,
-writable file in a persistent private directory outside those folders. If Hostinger cannot
-provide persistent writable storage to the Node.js app, use a VPS or migrate the database
-before going live.
+Create the MySQL database and user in Hostinger hPanel. Keep any SQLite source copy in a private
+directory outside the app checkout, versioned `hbuilds` folder, and public `public_html` folder.
 
 1. Push the current source to a private GitHub repository and create a Hostinger **Node.js Web
    App** from it. Use the repository root, Node.js 22.x or 24.x, build command `npm run build`,
    Vite output `dist`, and Express entry file `server/index.js` (or start command `npm start`).
+   Express serves the built `dist` files for the website and uses `/api` for backend routes.
 2. Set the app's environment variables in Hostinger:
    - `NODE_ENV=production`
    - `APP_ORIGINS=https://your-domain.example`
-   - `DATABASE_PATH=/home/your-user/domains/your-domain.example/fitworx-data/fitworx.sqlite`
-     (create this private, persistent directory and confirm the Node app can write to it)
+   - `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, and `MYSQL_PASSWORD` using the
+     values shown for the database in hPanel
    - `JWT_SECRET` to a new, long random value
    - `SMTP_*` and `GEMINI_API_KEY` if those features are needed
    - Let Hostinger provide `PORT`
-3. Run `npm run bootstrap:admin` once against the persistent database, using temporary
+3. To preserve your existing SQLite records, upload a copy of `fitworx.sqlite` to a private
+   directory accessible over SSH, set `SQLITE_SOURCE_PATH` to that file, and run
+   `npm run db:migrate-sqlite` once over SSH. Use a newly created, empty MySQL database, and run
+   the import before creating the first admin. Keep the SQLite original as a backup.
+4. Run `npm run bootstrap:admin` once against the MySQL database, using temporary
    `BOOTSTRAP_ADMIN_NAME`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD` values.
    Remove those bootstrap variables afterward. Do not run `npm run seed` on production data.
-4. Confirm `https://your-domain.example/api/health` responds, then build the mobile app with
+5. Confirm `https://your-domain.example/api/health` responds, then build the mobile app with
    `EXPO_PUBLIC_API_URL=https://your-domain.example/api` and install the new APK.
 
 Do not run `npm run seed` against a live database: it creates known demo credentials and
@@ -227,7 +233,7 @@ Use one of the seeded accounts, or ask an administrator to create additional sta
 
 ```
 server/
-  db.js              SQLite schema, connection, status helpers
+  db.js              MySQL schema, connection, status helpers
   seed.js            Demo data generator (safe to re-run)
   auth.js            JWT signing/verification middleware
   index.js           Express app entry point

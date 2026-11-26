@@ -3,11 +3,12 @@ import { Router } from "express";
 import { db, nextPaymentId } from "../db.js";
 import { requireAuth } from "../auth.js";
 import { isAllowedPaymentMethod, PAYMENT_METHOD_ERROR } from "../services/paymentMethods.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 const router = Router();
 router.use(requireAuth);
 
-router.get("/", (req, res) => {
+router.get("/", asyncHandler(async (req, res) => {
   const { memberId, walkinId, method, status, from, to } = req.query;
   const clauses = [];
   const params = [];
@@ -18,7 +19,7 @@ router.get("/", (req, res) => {
   if (from) { clauses.push("date(p.paid_at) >= ?"); params.push(from); }
   if (to) { clauses.push("date(p.paid_at) <= ?"); params.push(to); }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db.prepare(`
+  const rows = await (db.prepare(`
     SELECT p.*,
       m.first_name AS member_first_name, m.last_name AS member_last_name,
       w.name AS walkin_name, pl.name AS plan_name
@@ -29,16 +30,16 @@ router.get("/", (req, res) => {
     ${where}
     ORDER BY p.paid_at DESC
     LIMIT 500
-  `).all(...params);
+  `).all(...params));
   res.json(rows.map((r) => ({
     ...r,
     payer_name: r.member_first_name ? `${r.member_first_name} ${r.member_last_name}` : r.walkin_name,
   })));
-});
+}));
 
 // Record a manual/independent payment not tied to a new registration or renewal
 // (e.g. a cash top-up, or reconciling a pending transaction).
-router.post("/", (req, res) => {
+router.post("/", asyncHandler(async (req, res) => {
   const b = req.body || {};
   const amount = Number(b.amount);
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "Enter a valid payment amount." });
@@ -48,29 +49,29 @@ router.post("/", (req, res) => {
   if (!isAllowedPaymentMethod(b.method)) return res.status(400).json({ error: PAYMENT_METHOD_ERROR });
 
   if (b.memberId) {
-    const member = db.prepare("SELECT id, archived_at FROM members WHERE id = ?").get(b.memberId);
+    const member = await (db.prepare("SELECT id, archived_at FROM members WHERE id = ?").get(b.memberId));
     if (!member) return res.status(404).json({ error: "Member not found." });
     if (member.archived_at) return res.status(409).json({ error: "Archived members must be restored before recording a payment." });
   }
   if (b.walkinId) {
-    const walkin = db.prepare("SELECT id FROM walkins WHERE id = ?").get(b.walkinId);
+    const walkin = await (db.prepare("SELECT id FROM walkins WHERE id = ?").get(b.walkinId));
     if (!walkin) return res.status(404).json({ error: "Walk-in record not found." });
   }
 
-  const id = nextPaymentId();
-  db.prepare(`
+  const id = await (nextPaymentId());
+  await (db.prepare(`
     INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, reference_number, status, recorded_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, b.memberId || null, b.walkinId || null, b.memberId ? "membership" : "walk_in",
     b.planId || null, amount, b.method, b.referenceNumber || null,
     b.status || "paid", req.user.sub
-  );
-  res.status(201).json(db.prepare("SELECT * FROM payments WHERE id = ?").get(id));
-});
+  ));
+  res.status(201).json(await (db.prepare("SELECT * FROM payments WHERE id = ?").get(id)));
+}));
 
-router.put("/:id", (req, res) => {
-  const existing = db.prepare("SELECT * FROM payments WHERE id = ?").get(req.params.id);
+router.put("/:id", asyncHandler(async (req, res) => {
+  const existing = await (db.prepare("SELECT * FROM payments WHERE id = ?").get(req.params.id));
   if (!existing) return res.status(404).json({ error: "Transaction not found." });
 
   const status = req.body?.status;
@@ -78,9 +79,9 @@ router.put("/:id", (req, res) => {
     return res.status(400).json({ error: "Choose a valid transaction status." });
   }
 
-  db.prepare("UPDATE payments SET status=? WHERE id=?").run(status, req.params.id);
+  await (db.prepare("UPDATE payments SET status=? WHERE id=?").run(status, req.params.id));
 
-  res.json(db.prepare("SELECT * FROM payments WHERE id = ?").get(req.params.id));
-});
+  res.json(await (db.prepare("SELECT * FROM payments WHERE id = ?").get(req.params.id)));
+}));
 
 export default router;

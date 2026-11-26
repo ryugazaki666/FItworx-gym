@@ -3,18 +3,19 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { db } from "../db.js";
 import { signToken, requireAuth, requireAdmin } from "../auth.js";
+import { asyncHandler } from "../asyncHandler.js";
 
 const router = Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-router.post("/login", (req, res) => {
+router.post("/login", asyncHandler(async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required." });
   }
-  const user = db.prepare(
+  const user = await (db.prepare(
     "SELECT * FROM users WHERE email = ? COLLATE NOCASE AND active = 1"
-  ).get(email.trim());
+  ).get(email.trim()));
 
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: "Invalid email or password." });
@@ -25,22 +26,22 @@ router.post("/login", (req, res) => {
     token,
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
   });
-});
+}));
 
 router.get("/me", requireAuth, (req, res) => {
   res.json({ user: req.user });
 });
 
 // Admin-only: list staff accounts.
-router.get("/users", requireAuth, requireAdmin, (req, res) => {
-  const users = db.prepare(
+router.get("/users", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const users = await (db.prepare(
     "SELECT id, name, email, role, active, created_at FROM users ORDER BY created_at ASC"
-  ).all();
+  ).all());
   res.json(users);
-});
+}));
 
 // Admin-only: create a staff or admin account.
-router.post("/users", requireAuth, requireAdmin, (req, res) => {
+router.post("/users", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   const { name, email, password, role } = req.body || {};
   if (!name?.trim() || !email?.trim() || !password || !role) {
     return res.status(400).json({ error: "Name, email, password, and role are required." });
@@ -56,9 +57,9 @@ router.post("/users", requireAuth, requireAdmin, (req, res) => {
   }
   try {
     const hash = bcrypt.hashSync(password, 10);
-    const info = db.prepare(
+    const info = await (db.prepare(
       "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"
-    ).run(name.trim(), email.trim(), hash, role);
+    ).run(name.trim(), email.trim(), hash, role));
     res.status(201).json({ id: info.lastInsertRowid, name, email, role });
   } catch (error) {
     if (String(error.message).includes("UNIQUE")) {
@@ -66,16 +67,16 @@ router.post("/users", requireAuth, requireAdmin, (req, res) => {
     }
     res.status(400).json({ error: error.message });
   }
-});
+}));
 
 // Admin-only: deactivate a staff account (never hard-delete; preserves audit trail).
-router.delete("/users/:id", requireAuth, requireAdmin, (req, res) => {
+router.delete("/users/:id", requireAuth, requireAdmin, asyncHandler(async (req, res) => {
   if (Number(req.params.id) === req.user.sub) {
     return res.status(400).json({ error: "You cannot deactivate your own account." });
   }
-  const info = db.prepare("UPDATE users SET active = 0 WHERE id = ?").run(req.params.id);
+  const info = await (db.prepare("UPDATE users SET active = 0 WHERE id = ?").run(req.params.id));
   if (!info.changes) return res.status(404).json({ error: "User not found." });
   res.json({ ok: true });
-});
+}));
 
 export default router;

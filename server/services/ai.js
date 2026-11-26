@@ -154,7 +154,7 @@ export async function answerQuery(question, { maxRounds = 4 } = {}) {
       const tool = TOOLS[call.name];
       let resultPayload;
       try {
-        resultPayload = tool ? tool.run(call.arguments) : { error: `Unknown tool: ${call.name}` };
+        resultPayload = tool ? await tool.run(call.arguments) : { error: `Unknown tool: ${call.name}` };
       } catch (error) {
         resultPayload = { error: error.message };
       }

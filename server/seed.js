@@ -5,7 +5,9 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
-import { db, nextMemberId, nextWalkinId, nextPaymentId, refreshMemberStatuses } from "./db.js";
+import { db, initializeDatabase, nextMemberId, nextWalkinId, nextPaymentId, refreshMemberStatuses } from "./db.js";
+
+await initializeDatabase();
 
 function daysFromNow(days) {
   const d = new Date();
@@ -13,45 +15,45 @@ function daysFromNow(days) {
   return d.toISOString().slice(0, 10);
 }
 
-function seedSettings() {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM settings").get().c;
+async function seedSettings() {
+  const count = (await db.prepare("SELECT COUNT(*) AS c FROM settings").get()).c;
   if (count > 0) return;
-  const insert = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)");
-  insert.run("gym_name", "FitWorx Fitness Center — QC Branch");
-  insert.run("contact_email", "frontdesk@fitworx.gym");
-  insert.run("operating_hours", "5:00 AM – 10:00 PM, Daily");
+  const insert = db.prepare("INSERT INTO settings (`key`, `value`) VALUES (?, ?)");
+  await (insert.run("gym_name", "FitWorx Fitness Center — QC Branch"));
+  await (insert.run("contact_email", "frontdesk@fitworx.gym"));
+  await (insert.run("operating_hours", "5:00 AM – 10:00 PM, Daily"));
   console.log("Seeded gym profile settings.");
 }
 
-function seedUsers() {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
+async function seedUsers() {
+  const count = (await db.prepare("SELECT COUNT(*) AS c FROM users").get()).c;
   if (count > 0) return;
   const insert = db.prepare(
     "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"
   );
-  insert.run("Clyde Fabricante", "admin@fitworx.gym", bcrypt.hashSync("Admin123!", 10), "admin");
-  insert.run("Staff", "staff@fitworx.gym", bcrypt.hashSync("Staff123!", 10), "staff");
+  await (insert.run("Clyde Fabricante", "admin@fitworx.gym", bcrypt.hashSync("Admin123!", 10), "admin"));
+  await (insert.run("Staff", "staff@fitworx.gym", bcrypt.hashSync("Staff123!", 10), "staff"));
   console.log("Seeded users: admin@fitworx.gym / Admin123!, staff@fitworx.gym / Staff123!");
 }
 
-function seedPlans() {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM plans").get().c;
+async function seedPlans() {
+  const count = (await db.prepare("SELECT COUNT(*) AS c FROM plans").get()).c;
   if (count > 0) return;
   const insert = db.prepare(
     "INSERT INTO plans (name, price, duration_days, description, active) VALUES (?, ?, ?, ?, 1)"
   );
-  insert.run("1 Month", 1000, 30, "Most popular plan");
-  insert.run("3 Months", 2500, 90, "Quarterly savings");
-  insert.run("6 Months", 4500, 180, "Best for regulars");
-  insert.run("Annual", 8000, 365, "Lowest effective monthly rate");
+  await (insert.run("1 Month", 1000, 30, "Most popular plan"));
+  await (insert.run("3 Months", 2500, 90, "Quarterly savings"));
+  await (insert.run("6 Months", 4500, 180, "Best for regulars"));
+  await (insert.run("Annual", 8000, 365, "Lowest effective monthly rate"));
   console.log("Seeded membership plans.");
 }
 
-function seedMembers() {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM members").get().c;
+async function seedMembers() {
+  const count = (await db.prepare("SELECT COUNT(*) AS c FROM members").get()).c;
   if (count > 0) return;
   const planByName = Object.fromEntries(
-    db.prepare("SELECT id, name FROM plans").all().map((p) => [p.name, p.id])
+    (await db.prepare("SELECT id, name FROM plans").all()).map((p) => [p.name, p.id])
   );
   const insert = db.prepare(`
     INSERT INTO members (
@@ -75,24 +77,24 @@ function seedMembers() {
   const created = [];
   for (const m of sample) {
     const planId = planByName[m.plan];
-    const durationRow = db.prepare("SELECT duration_days FROM plans WHERE id = ?").get(planId);
+    const durationRow = await db.prepare("SELECT duration_days FROM plans WHERE id = ?").get(planId);
     const start = daysFromNow(m.startOffset);
     const exp = daysFromNow(m.startOffset + durationRow.duration_days);
-    const id = nextMemberId();
+    const id = await (nextMemberId());
     const status = m.suspended ? "suspended" : "active";
-    insert.run(
+    await (insert.run(
       id, m.first, m.last, m.dob, m.gender, m.phone, m.email, m.addr,
       null, null, null,
       planId, status, start, exp, daysFromNow(m.joined), randomUUID()
-    );
+    ));
     created.push({ id, planId, ...m });
   }
   console.log(`Seeded ${created.length} members.`);
   return created;
 }
 
-function seedWalkins() {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM walkins").get().c;
+async function seedWalkins() {
+  const count = (await db.prepare("SELECT COUNT(*) AS c FROM walkins").get()).c;
   if (count > 0) return;
   const insert = db.prepare(`
     INSERT INTO walkins (id, name, phone, service, amount, payment_method, visit_date, visit_time, status, notes)
@@ -104,13 +106,13 @@ function seedWalkins() {
     { name: "Nina Castillo", phone: "0920 555 6677", service: "Guest Pass", amount: 200, method: "GCash", date: daysFromNow(-2), time: "09:45", status: "pending", notes: "Awaiting payment confirmation" },
   ];
   for (const w of rows) {
-    insert.run(nextWalkinId(), w.name, w.phone, w.service, w.amount, w.method, w.date, w.time, w.status, w.notes);
+    await (insert.run(await (nextWalkinId()), w.name, w.phone, w.service, w.amount, w.method, w.date, w.time, w.status, w.notes));
   }
   console.log(`Seeded ${rows.length} walk-in records.`);
 }
 
-function seedPaymentsAndAttendance(members) {
-  const count = db.prepare("SELECT COUNT(*) AS c FROM payments").get().c;
+async function seedPaymentsAndAttendance(members) {
+  const count = (await db.prepare("SELECT COUNT(*) AS c FROM payments").get()).c;
   if (count > 0 || !members) return;
 
   const payInsert = db.prepare(`
@@ -122,17 +124,17 @@ function seedPaymentsAndAttendance(members) {
     VALUES (?, NULL, ?, ?, 'manual')
   `);
   const priceByPlan = Object.fromEntries(
-    db.prepare("SELECT id, price FROM plans").all().map((p) => [p.id, p.price])
+    (await db.prepare("SELECT id, price FROM plans").all()).map((p) => [p.id, p.price])
   );
   const methods = ["Cash", "GCash"];
 
   let paid = 0, visits = 0;
   for (const m of members) {
-    payInsert.run(
-      nextPaymentId(), m.id, "membership", m.planId, priceByPlan[m.planId],
+    await (payInsert.run(
+      await (nextPaymentId()), m.id, "membership", m.planId, priceByPlan[m.planId],
       methods[Math.floor(Math.random() * methods.length)],
       null, "paid", `${daysFromNow(m.startOffset)} 09:00:00`
-    );
+    ));
     paid++;
 
     // A few historical visits per member, spread over the past two weeks.
@@ -142,29 +144,29 @@ function seedPaymentsAndAttendance(members) {
       const hour = 6 + Math.floor(Math.random() * 12);
       const checkIn = `${daysFromNow(offset)} ${String(hour).padStart(2, "0")}:00:00`;
       const checkOut = `${daysFromNow(offset)} ${String(hour + 1).padStart(2, "0")}:15:00`;
-      attInsert.run(m.id, checkIn, checkOut);
+      await (attInsert.run(m.id, checkIn, checkOut));
       visits++;
     }
   }
 
   // Walk-in payments mirror walkins table for financial reporting completeness.
-  const walkins = db.prepare("SELECT * FROM walkins").all();
+  const walkins = await (db.prepare("SELECT * FROM walkins").all());
   const wpInsert = db.prepare(`
     INSERT INTO payments (id, member_id, walkin_id, type, plan_id, amount, method, reference_number, status, paid_at)
     VALUES (?, NULL, ?, 'walk_in', NULL, ?, ?, NULL, ?, ?)
   `);
   for (const w of walkins) {
-    wpInsert.run(nextPaymentId(), w.id, w.amount, w.payment_method, w.status === "completed" ? "paid" : "pending", `${w.visit_date} ${w.visit_time}:00`);
+    await (wpInsert.run(await (nextPaymentId()), w.id, w.amount, w.payment_method, w.status === "completed" ? "paid" : "pending", `${w.visit_date} ${w.visit_time}:00`));
   }
 
   console.log(`Seeded ${paid} membership payments, ${walkins.length} walk-in payments, ${visits} attendance records.`);
 }
 
-seedSettings();
-seedUsers();
-seedPlans();
-const members = seedMembers();
-seedWalkins();
-seedPaymentsAndAttendance(members);
-refreshMemberStatuses();
+await seedSettings();
+await seedUsers();
+await seedPlans();
+const members = await seedMembers();
+await seedWalkins();
+await seedPaymentsAndAttendance(members);
+await (refreshMemberStatuses());
 console.log("Seed complete.");
