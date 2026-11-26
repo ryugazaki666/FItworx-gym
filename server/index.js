@@ -4,7 +4,7 @@ import express from "express";
 import cors from "cors";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { databaseRequestContext, initializeDatabase, refreshMemberStatuses } from "./db.js";
+import { db, databaseRequestContext, initializeDatabase, refreshMemberStatuses } from "./db.js";
 import { requireAuth, requireStaff } from "./auth.js";
 import authRoutes from "./routes/auth.js";
 import memberRoutes from "./routes/members.js";
@@ -32,14 +32,6 @@ if (process.env.NODE_ENV === "production" && !allowedOrigins?.length) {
 app.use(cors({ origin: allowedOrigins?.length ? allowedOrigins : true }));
 app.use(express.json({ limit: "1mb" }));
 app.use(databaseRequestContext);
-
-// Keep member statuses (active/expiring/expired) accurate on every boot
-// and periodically, without requiring a separate cron process.
-await initializeDatabase();
-await (refreshMemberStatuses());
-setInterval(() => {
-  refreshMemberStatuses().catch((error) => console.error("Could not refresh member statuses:", error));
-}, 60 * 60 * 1000);
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -73,6 +65,25 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "An unexpected server error occurred." });
 });
 
-app.listen(port, () => {
-  console.log(`FitWorx API listening on port ${port}`);
+async function startServer() {
+  // Keep member statuses accurate without requiring a separate cron process.
+  await initializeDatabase();
+  await refreshMemberStatuses();
+  setInterval(() => {
+    refreshMemberStatuses().catch((error) => console.error("Could not refresh member statuses:", error));
+  }, 60 * 60 * 1000);
+
+  app.listen(port, () => {
+    console.log(`FitWorx API listening on port ${port}`);
+  });
+}
+
+startServer().catch(async (error) => {
+  console.error("Could not start FitWorx server:", error);
+  try {
+    await db.close();
+  } catch (closeError) {
+    console.error("Could not close the database pool after startup failure:", closeError);
+  }
+  process.exitCode = 1;
 });
